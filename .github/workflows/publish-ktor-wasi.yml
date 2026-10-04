@@ -96,12 +96,12 @@ jobs:
                 exit 1
               fi
             fi
-            version="${MANUAL_VERSION:-3.6.0-wasi-ci.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}}"
+            version="${MANUAL_VERSION:-3.6.0-ci.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}}"
           elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
             publish=true
             version="${GITHUB_REF_NAME#v}"
           else
-            version="3.6.0-wasi-ci.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+            version="3.6.0-ci.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
           fi
 
           if [[ ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then

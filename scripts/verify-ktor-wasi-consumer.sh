@@ -48,7 +48,7 @@ kotlin {
     }
     sourceSets {
         wasmWasiMain.dependencies {
-            implementation("dev.brahmkshatriya.ktor:ktor-client-wasi:${version}")
+            implementation("dev.brahmkshatriya.ktorwasi:ktor-client-wasi:${version}")
         }
     }
 }
@@ -68,4 +68,4 @@ EOF
     -p "$consumer" \
     compileKotlinWasmWasi
 
-echo "External Wasm/WASI consumer compiled dev.brahmkshatriya.ktor:ktor-client-wasi:$version"
+echo "External Wasm/WASI consumer compiled dev.brahmkshatriya.ktorwasi:ktor-client-wasi:$version"

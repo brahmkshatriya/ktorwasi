@@ -6,7 +6,7 @@ import json
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 
-GROUP = "dev.brahmkshatriya.ktor"
+GROUP = "dev.brahmkshatriya.ktorwasi"
 MODULES = (
     "ktor-client-wasi", "ktor-client-core", "ktor-http", "ktor-http-cio", "ktor-utils",
     "ktor-io", "ktor-events", "ktor-serialization", "ktor-sse",

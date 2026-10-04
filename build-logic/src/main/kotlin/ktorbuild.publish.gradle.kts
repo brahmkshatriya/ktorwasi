@@ -38,7 +38,7 @@ val isKtorWasmWasiPublicationModule = ktorWasmWasiPublicationMode.get() && name 
 
 if (isKtorWasmWasiPublicationModule) {
     group = providers.gradleProperty("ktorbuild.wasmWasiPublicationGroup")
-        .orElse("dev.brahmkshatriya.ktor")
+        .orElse("dev.brahmkshatriya.ktorwasi")
         .get()
 
     tasks.matching { it.name == "dokkaGeneratePublicationHtml" }.configureEach {
