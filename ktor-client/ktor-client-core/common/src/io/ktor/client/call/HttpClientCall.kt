@@ -93,6 +93,9 @@ public open class HttpClientCall(
                 throw DoubleReceiveException(this)
             }
 
+            val fastBody = (this as? SavedHttpCall)?.tryFastDefaultBody(info)
+            if (fastBody !== NO_FAST_BODY && fastBody != null) return fastBody
+
             val responseData = attributes.getOrNull(CustomResponse) ?: getResponseContent()
 
             val subject = HttpResponseContainer(info, responseData)

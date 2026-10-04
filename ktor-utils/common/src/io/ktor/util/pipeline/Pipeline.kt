@@ -53,6 +53,10 @@ public open class Pipeline<TSubject : Any, TContext : Any>(
 
     private var interceptorsQuantity = 0
 
+    /** Number of currently installed interceptors, for specialized pipeline implementations. */
+    protected val interceptorCount: Int
+        get() = interceptorsQuantity
+
     /**
      * Phases of this pipeline
      *

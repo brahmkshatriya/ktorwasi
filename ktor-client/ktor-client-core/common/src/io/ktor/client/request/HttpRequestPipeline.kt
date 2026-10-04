@@ -22,6 +22,9 @@ public class HttpRequestPipeline(
      *
      * [Report a problem](https://ktor.io/feedback/?fqname=io.ktor.client.request.HttpRequestPipeline.Phases)
      */
+    internal val fastPathInterceptorCount: Int
+        get() = interceptorCount
+
     public companion object Phases {
         /**
          * The earliest phase that happens before any other.
@@ -68,6 +71,9 @@ public class HttpRequestPipeline(
 public class HttpSendPipeline(
     override val developmentMode: Boolean = true
 ) : Pipeline<Any, HttpRequestBuilder>(Before, State, Monitoring, Engine, Receive) {
+
+    internal val fastPathInterceptorCount: Int
+        get() = interceptorCount
 
     public companion object Phases {
         /**

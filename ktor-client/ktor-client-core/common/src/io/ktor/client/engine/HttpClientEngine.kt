@@ -32,6 +32,13 @@ internal val CLIENT_CONFIG = AttributeKey<HttpClientConfig<*>>("client-config")
  *
  * [Report a problem](https://ktor.io/feedback/?fqname=io.ktor.client.engine.HttpClientEngine)
  */
+
+/**
+ * Marker for engines that can execute the Wasm/WASI buffered GET fast path.
+ */
+@InternalAPI
+public interface BufferedHttpClientEngineFastPath
+
 public interface HttpClientEngine : CoroutineScope, Closeable {
     /**
      * Specifies the [CoroutineDispatcher] for I/O operations in the engine.
@@ -164,27 +171,33 @@ public interface HttpClientEngine : CoroutineScope, Closeable {
         }
     }
 
-    /**
-     * Creates a call context and uses it as a coroutine context to [execute] a request.
-     */
-    @OptIn(InternalAPI::class)
-    private suspend fun executeWithinCallContext(requestData: HttpRequestData): HttpResponseData {
-        val callContext = createCallContext(requestData.executionContext)
-
-        val context = callContext + KtorCallContextElement(callContext)
-        return async(context) {
-            if (closed) {
-                throw ClientEngineClosedException()
-            }
-
-            execute(requestData)
-        }.await()
-    }
 
     private fun checkExtensions(requestData: HttpRequestData) {
-        for (requestedExtension in requestData.requiredCapabilities) {
-            require(supportedCapabilities.contains(requestedExtension)) { "Engine doesn't support $requestedExtension" }
+        checkRequestExtensions(requestData)
+    }
+}
+
+internal fun HttpClientEngine.checkRequestExtensions(requestData: HttpRequestData) {
+    for (requestedExtension in requestData.requiredCapabilities) {
+        require(supportedCapabilities.contains(requestedExtension)) { "Engine doesn't support $requestedExtension" }
+    }
+}
+
+@OptIn(InternalAPI::class)
+internal suspend fun HttpClientEngine.executeWithinCallContext(requestData: HttpRequestData): HttpResponseData {
+    val engineJob = coroutineContext[Job]
+    val callContext = createCallContext(requestData.executionContext)
+    val context = callContext + KtorCallContextElement(callContext)
+    return if (PlatformUtils.IS_WASM_WASI) {
+        withContext(context) {
+            if (!(engineJob?.isActive ?: false)) throw ClientEngineClosedException()
+            execute(requestData)
         }
+    } else {
+        async(context) {
+            if (!(engineJob?.isActive ?: false)) throw ClientEngineClosedException()
+            execute(requestData)
+        }.await()
     }
 }
 
@@ -224,7 +237,7 @@ internal suspend fun HttpClientEngine.createCallContext(parentJob: Job): Corouti
 /**
  * Validates request headers and fails if there are unsafe headers supplied
  */
-private fun validateHeaders(request: HttpRequestData) {
+internal fun validateHeaders(request: HttpRequestData) {
     val requestHeaders = request.headers
     val unsafeRequestHeaders = requestHeaders.names().filter {
         it in HttpHeaders.UnsafeHeadersList

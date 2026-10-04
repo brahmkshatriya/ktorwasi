@@ -23,6 +23,9 @@ public class HttpResponsePipeline(
     State,
     After
 ) {
+    internal val fastPathInterceptorCount: Int
+        get() = interceptorCount
+
     public companion object Phases {
         /**
          * The earliest phase that happens before any other
@@ -69,6 +72,9 @@ public class HttpResponsePipeline(
 public class HttpReceivePipeline(
     override val developmentMode: Boolean = true
 ) : Pipeline<HttpResponse, Unit>(Before, State, After) {
+    internal val fastPathInterceptorCount: Int
+        get() = interceptorCount
+
     public companion object Phases {
         /**
          * The earliest phase that happens before any other

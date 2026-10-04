@@ -18,15 +18,54 @@ plugins {
 
 addProjectTag(ProjectTag.Published)
 
+val ktorWasmWasiPublicationMode = providers.gradleProperty("ktorbuild.wasmWasiPublication")
+    .map(String::toBoolean)
+    .orElse(false)
+val ktorWasmWasiPublicationModules = setOf(
+    "ktor-client-wasi",
+    "ktor-client-core",
+    "ktor-http",
+    "ktor-http-cio",
+    "ktor-utils",
+    "ktor-io",
+    "ktor-events",
+    "ktor-serialization",
+    "ktor-sse",
+    "ktor-websocket-serialization",
+    "ktor-websockets",
+)
+val isKtorWasmWasiPublicationModule = ktorWasmWasiPublicationMode.get() && name in ktorWasmWasiPublicationModules
+
+if (isKtorWasmWasiPublicationModule) {
+    group = providers.gradleProperty("ktorbuild.wasmWasiPublicationGroup")
+        .orElse("dev.brahmkshatriya.ktor")
+        .get()
+
+    tasks.matching { it.name == "dokkaGeneratePublicationHtml" }.configureEach {
+        onlyIf("Ktor WASI publication uses an empty javadoc jar") { false }
+    }
+}
+
 mavenPublishing {
-    if (shouldPublishToMavenCentral()) publishToMavenCentral(automaticRelease = true)
-    configureSigning(this)
+    if (!ktorWasmWasiPublicationMode.get() && shouldPublishToMavenCentral()) {
+        publishToMavenCentral(automaticRelease = true)
+    }
+    if (!ktorWasmWasiPublicationMode.get()) configureSigning(this)
 
     pom {
         name = project.name
         description = project.description.orEmpty()
             .ifEmpty { "Ktor is a framework for quickly creating web applications in Kotlin with minimal effort." }
-        url = "https://github.com/ktorio/ktor"
+        val scmUrl = if (isKtorWasmWasiPublicationModule) {
+            providers.gradleProperty("ktorbuild.wasmWasiScmUrl")
+                .orElse("https://github.com/ktorio/ktor")
+                .get()
+        } else {
+            "https://github.com/ktorio/ktor"
+        }
+        val scmGitUrl = if (scmUrl.endsWith(".git")) scmUrl else "$scmUrl.git"
+
+        url = scmUrl
         licenses {
             license {
                 name = "The Apache Software License, Version 2.0"
@@ -43,14 +82,26 @@ mavenPublishing {
             }
         }
         scm {
-            url = "https://github.com/ktorio/ktor.git"
+            url = scmGitUrl
+            connection = "scm:git:$scmGitUrl"
+            developerConnection = "scm:git:$scmGitUrl"
         }
     }
 }
 
 publishing {
     repositories {
-        addTargetRepositoryIfConfigured()
+        if (isKtorWasmWasiPublicationModule) {
+            val repositoryPath = providers.gradleProperty("ktorbuild.wasmWasiRepository")
+                .orElse(rootProject.layout.projectDirectory.dir("release/maven-repository").asFile.absolutePath)
+                .get()
+            maven {
+                name = "KtorWasmWasi"
+                url = project.uri(repositoryPath)
+            }
+        } else {
+            addTargetRepositoryIfConfigured()
+        }
         mavenLocal()
     }
 }

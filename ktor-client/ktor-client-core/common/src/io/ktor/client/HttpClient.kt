@@ -11,6 +11,7 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.client.utils.*
 import io.ktor.events.*
+import io.ktor.http.*
 import io.ktor.util.*
 import io.ktor.utils.io.*
 import io.ktor.utils.io.core.*
@@ -19,6 +20,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.job
 import kotlinx.coroutines.cancel
 import kotlin.coroutines.CoroutineContext
 
@@ -1308,6 +1311,10 @@ public class HttpClient(
     }
 
     private val closed = atomic(false)
+    private val useWasmWasiDefaultFastPath: Boolean =
+        PlatformUtils.IS_WASM_WASI && userConfig.isWasmWasiDefaultFastPathCompatible &&
+            engine is BufferedHttpClientEngineFastPath
+    private var wasmWasiFastPathPipelineCounts: IntArray? = null
 
     private val clientJob: CompletableJob = Job(engine.coroutineContext[Job])
 
@@ -1409,6 +1416,25 @@ public class HttpClient(
                 throw cause
             }
         }
+
+        if (useWasmWasiDefaultFastPath) {
+            wasmWasiFastPathPipelineCounts = currentPipelineInterceptorCounts()
+        }
+    }
+
+    private fun currentPipelineInterceptorCounts(): IntArray = intArrayOf(
+        requestPipeline.fastPathInterceptorCount,
+        sendPipeline.fastPathInterceptorCount,
+        receivePipeline.fastPathInterceptorCount,
+        responsePipeline.fastPathInterceptorCount,
+    )
+
+    private fun isWasmWasiFastPathPipelineCompatible(): Boolean {
+        val expected = wasmWasiFastPathPipelineCounts ?: return false
+        return requestPipeline.fastPathInterceptorCount == expected[0] &&
+            sendPipeline.fastPathInterceptorCount == expected[1] &&
+            receivePipeline.fastPathInterceptorCount == expected[2] &&
+            responsePipeline.fastPathInterceptorCount == expected[3]
     }
 
     /**
@@ -1417,7 +1443,83 @@ public class HttpClient(
     internal suspend fun execute(builder: HttpRequestBuilder): HttpClientCall {
         monitor.raise(HttpRequestCreated, builder)
 
+        if (useWasmWasiDefaultFastPath && isWasmWasiFastPathPipelineCompatible() &&
+            builder.method == HttpMethod.Get && builder.body === EmptyContent && builder.attributes.allKeys.isEmpty()
+        ) {
+            return executeWasmWasiDefaultGet(builder)
+        }
+
         return requestPipeline.execute(builder, builder.body) as HttpClientCall
+    }
+
+    @OptIn(InternalAPI::class)
+    private suspend fun executeWasmWasiDefaultGet(initialBuilder: HttpRequestBuilder): HttpClientCall {
+        val executionContext = SupervisorJob(initialBuilder.executionContext)
+        attachToClientEngineJob(executionContext, engine.coroutineContext[Job]!!)
+        var builder = initialBuilder
+        builder.executionContext = executionContext
+
+        try {
+            while (true) {
+                if (builder.headers[HttpHeaders.Accept] == null) builder.headers.append(HttpHeaders.Accept, "*/*")
+                monitor.raise(HttpRequestIsReadyForSending, builder)
+
+                val requestData = HttpRequestData(
+                    url = builder.url.build(),
+                    method = builder.method,
+                    headers = builder.headers.build(),
+                    body = EmptyContent,
+                    executionContext = executionContext,
+                    attributes = builder.attributes,
+                ).apply {
+                    attributes.put(CLIENT_CONFIG, config)
+                }
+                validateHeaders(requestData)
+                engine.checkRequestExtensions(requestData)
+
+                val responseData = engine.executeWithinCallContext(requestData)
+                val preSaved = responseData.body as? PreSavedResponseBody
+                    ?: error("Buffered Wasm/WASI engine returned a non-buffered response")
+                val call = SavedHttpCall(this, requestData, responseData, preSaved.bytes)
+                val response = call.response
+                monitor.raise(HttpResponseReceived, response)
+                response.coroutineContext.job.invokeOnCompletion { cause ->
+                    if (cause != null) monitor.raise(HttpResponseCancelled, response)
+                }
+                response.complete()
+
+                if (!response.status.isWasmWasiRedirect()) return call
+                val location = response.headers[HttpHeaders.Location] ?: return call
+                monitor.raise(HttpResponseRedirectEvent, response)
+
+                val previousProtocol = call.request.url.protocol
+                val previousAuthority = call.request.url.authority
+                val nextBuilder = HttpRequestBuilder().apply {
+                    takeFromWithExecutionContext(builder)
+                    url.parameters.clear()
+                    url.takeFrom(location)
+                }
+                if (previousProtocol.isSecure() && !nextBuilder.url.protocol.isSecure()) return call
+                if (previousAuthority != nextBuilder.url.authority) {
+                    nextBuilder.headers.remove(HttpHeaders.Authorization)
+                }
+                builder = nextBuilder
+            }
+        } catch (cause: Throwable) {
+            executionContext.cancel(CancellationException("Wasm/WASI fast request failed", cause))
+            throw cause
+        } finally {
+            executionContext.complete()
+        }
+    }
+
+    private fun HttpStatusCode.isWasmWasiRedirect(): Boolean = when (value) {
+        HttpStatusCode.MovedPermanently.value,
+        HttpStatusCode.Found.value,
+        HttpStatusCode.SeeOther.value,
+        HttpStatusCode.TemporaryRedirect.value,
+        HttpStatusCode.PermanentRedirect.value -> true
+        else -> false
     }
 
     /**

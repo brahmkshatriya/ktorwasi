@@ -69,8 +69,26 @@ abstract class KtorTargets @Inject internal constructor(
     providers: ProviderFactory,
 ) {
 
+    private val wasmWasiPublicationMode: Provider<Boolean> =
+        providers.gradleProperty("ktorbuild.wasmWasiPublication")
+            .map(String::toBoolean)
+            .map { enabled -> enabled && layout.projectDirectory.asFile.name in wasmWasiPublicationModules }
+            .orElse(false)
+
+    internal val isWasmWasiPublicationMode: Boolean
+        get() = wasmWasiPublicationMode.get()
+
     private val targetStates: MutableMap<String, Boolean> by lazy {
-        loadDefaults(providers.projectGradleProperties(layout, "target.").get())
+        loadDefaults(providers.projectGradleProperties(layout, "target.").get()).apply {
+            if (isWasmWasiPublicationMode) {
+                // The fork publication is intentionally a common metadata + Wasm/WASI-only build.
+                // Force the target topology here so CI cannot accidentally configure or publish
+                // JVM, JS/WasmJS, Android, Native, or Darwin variants because of source-set layout.
+                for (target in hierarchyTracker.targetSourceSets.keys) {
+                    this[target] = target == "wasmWasi"
+                }
+            }
+        }
     }
 
     private val targetDirectories: Provider<Set<String>> = providers.projectTargetDirectories(layout)
@@ -96,6 +114,7 @@ abstract class KtorTargets @Inject internal constructor(
     val hasJvm: Boolean get() = isEnabled("jvm")
     val hasJs: Boolean get() = isEnabled("js")
     val hasWasmJs: Boolean get() = isEnabled("wasmJs")
+    val hasWasmWasi: Boolean get() = isEnabled("wasmWasi")
     val hasAndroidJvm: Boolean get() = isEnabled("android")
 
     val hasWeb: Boolean get() = hasJs || hasWasmJs
@@ -163,6 +182,20 @@ abstract class KtorTargets @Inject internal constructor(
     }
 
     companion object {
+        private val wasmWasiPublicationModules = setOf(
+            "ktor-client-wasi",
+            "ktor-client-core",
+            "ktor-http",
+            "ktor-http-cio",
+            "ktor-utils",
+            "ktor-io",
+            "ktor-events",
+            "ktor-serialization",
+            "ktor-sse",
+            "ktor-websocket-serialization",
+            "ktor-websockets",
+        )
+
         private val defaultFilter: (String) -> Boolean = { true }
         private val hierarchyTracker = KotlinHierarchyTracker()
 
@@ -217,6 +250,7 @@ abstract class KtorTargets @Inject internal constructor(
                 group("nonJvm") {
                     group("posix")
                     group("web")
+                    withWasmWasi()
                 }
 
                 group("nonDarwinPosix") {
@@ -257,6 +291,10 @@ internal fun KotlinMultiplatformExtension.addTargets(targets: KtorTargets, isCI:
     }
     @OptIn(ExperimentalWasmDsl::class)
     if (targets.hasWasmJs) wasmJs { addSubTargets(targets) }
+    @OptIn(ExperimentalWasmDsl::class)
+    if (targets.hasWasmWasi) wasmWasi {
+        nodejs()
+    }
 
     // Native targets
     // See: https://kotlinlang.org/docs/native-target-support.html
@@ -287,7 +325,7 @@ internal fun KotlinMultiplatformExtension.addTargets(targets: KtorTargets, isCI:
     if (targets.isEnabled("mingwX64")) mingwX64()
     if (targets.isEnabled("watchosDeviceArm64")) watchosDeviceArm64()
 
-    freezeSourceSets(targets.isLightSync)
+    freezeSourceSets(targets.isLightSync || targets.isWasmWasiPublicationMode)
     flattenSourceSetsStructure()
 }
 

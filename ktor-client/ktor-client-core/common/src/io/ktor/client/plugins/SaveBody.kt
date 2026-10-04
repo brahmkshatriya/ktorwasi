@@ -21,7 +21,7 @@ import io.ktor.utils.io.*
 import kotlin.jvm.JvmName
 
 private val SKIP_SAVE_BODY = AttributeKey<Unit>("SkipSaveBody")
-private val RESPONSE_BODY_SAVED = AttributeKey<Unit>("ResponseBodySaved")
+internal val RESPONSE_BODY_SAVED = AttributeKey<Unit>("ResponseBodySaved")
 
 private val LOGGER by lazy { KtorSimpleLogger("io.ktor.client.plugins.SaveBody") }
 

@@ -61,6 +61,10 @@ public class HttpClientConfig<T : HttpClientEngineConfig> {
 
     internal var engineConfig: T.() -> Unit = {}
 
+    internal val isWasmWasiDefaultFastPathCompatible: Boolean
+        get() = plugins.isEmpty() && customInterceptors.isEmpty() &&
+            followRedirects && useDefaultTransformers && !expectSuccess
+
     /**
      * A builder for configuring engine-specific settings in [HttpClientEngineConfig],
      * such as dispatcher, thread count, proxy, and more.

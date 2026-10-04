@@ -1,0 +1,261 @@
+name: Ktor Wasm/WASI CI and Publish
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/publish-ktor-wasi.yml"
+      - "build-logic/**"
+      - "build.gradle.kts"
+      - "gradle/**"
+      - "gradle.properties"
+      - "gradlew"
+      - "gradlew.bat"
+      - "settings.gradle.kts"
+      - "scripts/verify-ktor-wasi-repository.py"
+      - "scripts/verify-ktor-wasi-consumer.sh"
+      - "scripts/publish-ktor-wasi-central-bundle.sh"
+      - "ktor-client/ktor-client-core/**"
+      - "ktor-client/ktor-client-wasi/**"
+      - "ktor-http/**"
+      - "ktor-io/**"
+      - "ktor-utils/**"
+      - "ktor-shared/ktor-events/**"
+      - "ktor-shared/ktor-serialization/**"
+      - "ktor-shared/ktor-sse/**"
+      - "ktor-shared/ktor-websocket-serialization/**"
+      - "ktor-shared/ktor-websockets/**"
+  push:
+    branches:
+      - "**"
+    tags:
+      - "*"
+    paths:
+      - ".github/workflows/publish-ktor-wasi.yml"
+      - "build-logic/**"
+      - "build.gradle.kts"
+      - "gradle/**"
+      - "gradle.properties"
+      - "gradlew"
+      - "gradlew.bat"
+      - "settings.gradle.kts"
+      - "scripts/verify-ktor-wasi-repository.py"
+      - "scripts/verify-ktor-wasi-consumer.sh"
+      - "scripts/publish-ktor-wasi-central-bundle.sh"
+      - "ktor-client/ktor-client-core/**"
+      - "ktor-client/ktor-client-wasi/**"
+      - "ktor-http/**"
+      - "ktor-io/**"
+      - "ktor-utils/**"
+      - "ktor-shared/ktor-events/**"
+      - "ktor-shared/ktor-serialization/**"
+      - "ktor-shared/ktor-sse/**"
+      - "ktor-shared/ktor-websocket-serialization/**"
+      - "ktor-shared/ktor-websockets/**"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Maven version (required when publishing)"
+        required: false
+        type: string
+      publish:
+        description: "Publish the built repository to Maven Central"
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: ktor-wasi-${{ github.ref }}-${{ inputs.version || github.run_id }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') && !(github.event_name == 'workflow_dispatch' && inputs.publish) }}
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Resolve publication version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - name: Resolve and validate version
+        id: version
+        shell: bash
+        env:
+          MANUAL_VERSION: ${{ inputs.version }}
+          MANUAL_PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          publish=false
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$MANUAL_PUBLISH" == "true" ]]; then
+              publish=true
+              if [[ -z "$MANUAL_VERSION" ]]; then
+                echo "A version is required for manual publication" >&2
+                exit 1
+              fi
+            fi
+            version="${MANUAL_VERSION:-3.6.0-wasi-ci.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}}"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            publish=true
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="3.6.0-wasi-ci.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          fi
+
+          if [[ ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+            echo "Invalid Maven version: $version" >&2
+            exit 1
+          fi
+          if [[ "$version" == *SNAPSHOT* ]]; then
+            echo "SNAPSHOT versions are not allowed in the isolated publication repository" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "Publication version: $version"
+          echo "Publish to Central: $publish"
+
+  build:
+    name: Build Ktor Wasm/WASI repository
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6.0.1
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Compile core and WASI engine
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            --configuration-cache \
+            --configure-on-demand \
+            -Pktor.develocity.skipBuildScans=true \
+            -Pktorbuild.wasmWasiPublication=true \
+            "-PreleaseVersion=$RELEASE_VERSION" \
+            :ktor-client-core:compileKotlinWasmWasi \
+            :ktor-client-wasi:compileKotlinWasmWasi
+
+      - name: Build isolated Maven repository
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          repository="$GITHUB_WORKSPACE/release/maven-repository"
+          rm -rf "$repository"
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            --no-configuration-cache \
+            --configure-on-demand \
+            -Pktor.develocity.skipBuildScans=true \
+            -Pktorbuild.wasmWasiPublication=true \
+            "-Pktorbuild.wasmWasiRepository=$repository" \
+            "-Pktorbuild.wasmWasiScmUrl=https://github.com/$GITHUB_REPOSITORY" \
+            "-PreleaseVersion=$RELEASE_VERSION" \
+            publishKtorWasmWasiToMavenRepository
+
+      - name: Verify Maven repository
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-ktor-wasi-repository.py release/maven-repository "$RELEASE_VERSION"
+
+      - name: Compile external Wasm/WASI consumer
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          bash scripts/verify-ktor-wasi-consumer.sh release/maven-repository "$RELEASE_VERSION"
+
+      - name: Report repository size
+        shell: bash
+        run: du -sh release/maven-repository
+
+      - name: Upload Maven repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: ktor-wasi-maven-repo-${{ needs.prepare.outputs.version }}
+          path: release/maven-repository
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish exact repository to Maven Central
+    if: needs.prepare.outputs.publish == 'true'
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7.0.1
+
+      - name: Download built Maven repository
+        uses: actions/download-artifact@v4
+        with:
+          name: ktor-wasi-maven-repo-${{ needs.prepare.outputs.version }}
+          path: release/maven-repository
+
+      - name: Restore Gradle properties and signing key
+        shell: bash
+        env:
+          GRADLE_PROPERTIES_CONTENT: ${{ secrets.GRADLE_PROPERTIES_CONTENT }}
+          GPG_SECRET_KEY_RING_BASE64: ${{ secrets.GPG_SECRET_KEY_RING_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$GRADLE_PROPERTIES_CONTENT"
+          test -n "$GPG_SECRET_KEY_RING_BASE64"
+          gradle_dir="$HOME/.gradle"
+          properties_file="$gradle_dir/gradle.properties"
+          keyring="$gradle_dir/ktor-wasi-secret-key.gpg"
+          mkdir -p "$gradle_dir"
+          printf '%s' "$GRADLE_PROPERTIES_CONTENT" > "$properties_file"
+          printf '%s' "$GPG_SECRET_KEY_RING_BASE64" | tr -d '\r\n ' | openssl base64 -d -A > "$keyring"
+          test -s "$keyring"
+          awk '!/^signing.secretKeyRingFile=/' "$properties_file" > "$properties_file.tmp"
+          mv "$properties_file.tmp" "$properties_file"
+          printf '\nsigning.secretKeyRingFile=%s\n' "$keyring" >> "$properties_file"
+          chmod 600 "$properties_file" "$keyring"
+
+      - name: Sign and publish one Central deployment
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          bash scripts/publish-ktor-wasi-central-bundle.sh \
+            "$GITHUB_WORKSPACE/release/maven-repository" \
+            "$RELEASE_VERSION" \
+            "$GITHUB_WORKSPACE/release/ktor-wasi-$RELEASE_VERSION.zip"
+
+      - name: Preserve failed Central bundle
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-ktor-wasi-central-bundle-${{ needs.prepare.outputs.version }}
+          path: release/ktor-wasi-${{ needs.prepare.outputs.version }}.zip
+          if-no-files-found: ignore
+          retention-days: 7

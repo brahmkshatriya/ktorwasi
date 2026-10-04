@@ -126,6 +126,7 @@ projects {
         +"ktor-client-jetty-jakarta"
         +"ktor-client-js"
         +"ktor-client-mock"
+        +"ktor-client-wasi"
         +"ktor-client-okhttp"
         +"ktor-client-engine-defaults"
 

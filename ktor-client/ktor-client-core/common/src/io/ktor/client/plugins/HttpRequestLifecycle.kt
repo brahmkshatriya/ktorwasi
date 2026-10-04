@@ -47,7 +47,7 @@ public object SetupRequestContext : ClientHook<suspend (HttpRequestBuilder, susp
 /**
  * Attach client engine job.
  */
-private fun attachToClientEngineJob(
+internal fun attachToClientEngineJob(
     requestJob: CompletableJob,
     clientEngineJob: Job
 ) {
