@@ -109,8 +109,11 @@ publishing {
 registerCommonPublishTask()
 
 plugins.withId("ktorbuild.kmp") {
-    // Don't allow cross-compilation on CI, but it is okay to use it locally
-    if (ktorBuild.isCI.get()) {
+    // Don't allow cross-compilation on CI, but it is okay to use it locally.
+    // The dedicated Wasm/WASI publication mode already configures an Ubuntu-buildable
+    // wasmWasi-only target graph. The generic host-availability filter does not know about
+    // the wasmWasi publication name and would incorrectly skip every target publication.
+    if (ktorBuild.isCI.get() && !ktorWasmWasiPublicationMode.get()) {
         tasks.withType<AbstractPublishToMaven>().configureEach {
             val os = ktorBuild.os.get()
             // Workaround for https://github.com/gradle/gradle/issues/22641
