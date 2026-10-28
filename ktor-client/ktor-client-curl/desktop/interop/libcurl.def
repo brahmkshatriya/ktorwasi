@@ -12,5 +12,6 @@ linkerOpts.mingw = -liphlpapi -lsecur32 -lcrypt32 -lws2_32
 staticLibraries.osx = libcurl.a libnghttp2.a libssl.a libcrypto.a
 linkerOpts.osx = -framework SystemConfiguration
 
-staticLibraries.linux = libcurl.a libnghttp2.a libssl.a libcrypto.a
-linkerOpts.linux = -lz
+# Use the system libcurl on Linux. The desktop app already has system shared-library dependencies,
+# and this avoids embedding libcurl + OpenSSL into every Kotlin/Native executable.
+linkerOpts.linux = -lcurl -lz
